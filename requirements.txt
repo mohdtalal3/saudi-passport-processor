@@ -1,0 +1,18 @@
+requests
+google-generativeai
+PyQt5
+Pillow
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+python-dotenv
+seleniumbase
+packaging
+
+Insafhajjspl@gmail.com
+
+Shakiru@2025
+
+
+companionId : 109000101769899
