@@ -427,6 +427,9 @@ class PassportProcessor(QThread):
                     else:
                         self.log_signal.emit("No birth date found in passport data")
                     
+                    # Clean special characters from English names
+                    passport_data = self.clean_passport_data(passport_data)
+                    
                     # Process using API requests
                     mutamer_id = self.process_passport_api(passport_file, passport_data, self.use_separate_iqama, self.iqama_image_path, self.iqama_number)
                     if mutamer_id:
@@ -494,6 +497,39 @@ class PassportProcessor(QThread):
             self.error_signal.emit(f"Critical error: {str(e)}")
         finally:
             self.finished_signal.emit()
+    
+    def clean_passport_data(self, passport_data):
+        """Remove special characters from English names in passport data"""
+        if not passport_data:
+            return passport_data
+        
+        # Names that need special character removal
+        name_fields = ['first_name', 'last_name', 'husband_name', 'father_name']
+        
+        for field in name_fields:
+            if field in passport_data:
+                field_value = passport_data[field]
+                
+                # Handle None, null, empty string, or whitespace-only values
+                if field_value is None or field_value == "null" or field_value == "":
+                    passport_data[field] = ""
+                    continue
+                
+                # Convert to string and check if it's meaningful
+                field_str = str(field_value).strip()
+                if not field_str or field_str.lower() == "null" or field_str.lower() == "none":
+                    passport_data[field] = ""
+                    continue
+                
+                # Remove special characters, keep only letters and spaces
+                cleaned_name = re.sub(r'[^A-Za-z\s]', '', field_str)
+                # Remove extra spaces and strip
+                cleaned_name = ' '.join(cleaned_name.split())
+                
+                # If after cleaning there's nothing left, set to empty string
+                passport_data[field] = cleaned_name if cleaned_name else ""
+                
+        return passport_data
     
     def extract_passport_data(self, image_path):
         try:
