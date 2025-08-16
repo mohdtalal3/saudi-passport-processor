@@ -8,7 +8,6 @@ google-auth-oauthlib
 google-auth-httplib2
 python-dotenv
 seleniumbase
-packaging
 
 Insafhajjspl@gmail.com
 
@@ -16,3 +15,6 @@ Shakiru@2025
 
 
 companionId : 109000101769899
+
+
+HG1162715

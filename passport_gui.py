@@ -9,8 +9,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                             QTextEdit, QFileDialog, QCheckBox, QMessageBox,
                             QProgressBar, QFrame, QScrollArea, QListWidget,
-                            QListWidgetItem, QDialog, QDialogButtonBox, QMenuBar,
-                            QMenu, QAction)
+                            QListWidgetItem, QDialog, QDialogButtonBox, QTableWidget,
+                            QTableWidgetItem, QHeaderView, QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QPalette, QColor, QPixmap, QIcon
 import google.generativeai as genai
@@ -19,7 +19,83 @@ from seleniumbase import SB
 import config
 from login_dialog import LoginDialog
 from auth_manager import AuthManager
-from updater import create_updater
+from updater import AutoUpdater
+
+class CompanionMappingDialog(QDialog):
+    """Dialog for mapping child passports to companion passport numbers"""
+    
+    def __init__(self, passport_files, parent=None):
+        super().__init__(parent)
+        self.passport_files = passport_files
+        self.companion_mappings = {}  # {passport_file: companion_passport_number}
+        self.initUI()
+    
+    def initUI(self):
+        self.setWindowTitle("Child Companion Mapping")
+        self.setModal(True)
+        self.resize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        instructions = QLabel(
+            "For each child passport, enter their companion's passport number.\n"
+            "Leave empty if the person is not a child or doesn't have a companion."
+        )
+        instructions.setStyleSheet("color: #666; margin-bottom: 15px; font-size: 11px;")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Table for mapping
+        self.table = QTableWidget(len(self.passport_files), 2)
+        self.table.setHorizontalHeaderLabels(["Passport File", "Companion Passport Number"])
+        
+        # Set column widths
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 200)
+        
+        # Populate table
+        for i, file_path in enumerate(self.passport_files):
+            filename = os.path.basename(file_path)
+            
+            # Passport file name (read-only)
+            file_item = QTableWidgetItem(filename)
+            file_item.setFlags(file_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, file_item)
+            
+            # Companion passport number input
+            companion_input = QLineEdit()
+            companion_input.setPlaceholderText("Enter companion's passport number")
+            self.table.setCellWidget(i, 1, companion_input)
+        
+        layout.addWidget(self.table)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addStretch()
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(ok_button)
+        
+        layout.addLayout(button_layout)
+    
+    def get_companion_mappings(self):
+        """Get the companion mappings from the dialog"""
+        mappings = {}
+        for i in range(len(self.passport_files)):
+            file_path = self.passport_files[i]
+            companion_input = self.table.cellWidget(i, 1)
+            companion_passport = companion_input.text().strip()
+            if companion_passport:
+                mappings[file_path] = companion_passport
+        return mappings
 
 class TokenExtractor:
     """Handle automatic token extraction using Selenium"""
@@ -170,7 +246,7 @@ class PassportProcessor(QThread):
     error_signal = pyqtSignal(str)
     auth_required_signal = pyqtSignal()
     
-    def __init__(self, passport_files, email, phone_number, create_group, group_name, token_data, user_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None):
+    def __init__(self, passport_files, email, phone_number, create_group, group_name, token_data, user_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None, companion_mappings=None):
         super().__init__()
         self.passport_files = passport_files
         self.email = email
@@ -181,9 +257,10 @@ class PassportProcessor(QThread):
         self.use_separate_iqama = use_separate_iqama
         self.iqama_image_path = iqama_image_path
         self.iqama_number = iqama_number
+        self.companion_mappings = companion_mappings or {}  # Store companion mappings
         # Hardcoded token data - replace with actual values later
         self.token_data = {
-            "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJwdWJsaWNVc2VyIjpmYWxzZSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic3JjIjoicHJvZCIsIm5hbWUiOiJST01BTiBVTExBSCBTSEFLSVIgVUxMQUgiLCJ1c2VyVHlwZSI6MywidG9rZW5UeXBlIjo1LCJ1c2VySWQiOjEwMDg4NjA4NiwiVFJBTlNBQ1RJT05fSUQiOiJmZDk4MDEyMC0yMWFlLTQ1NDUtYmI2ZC05NWMxNTRlYWUzZTQiLCJqdGkiOiJNRldkeFJiblNrIiwiaWRlbnRpZmljYXRpb25OdW0iOiJKWjI3MzQxNzQiLCJzdWIiOiJpbnNhZmhhampzcGxAZ21haWwuY29tIiwiaWF0IjoxNzU1MjgwNDM0LCJleHAiOjE3NTUyODY0MzR9.WyfT3ZartsGNDknxLSCBsUJysRRvfQ1MBUFnJchpEdwnvsmFmmJ3UTRSrQ9oE4jjD3jrekvKN0-ZQOAvBl5RIQ",
+            "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJhY3RpdmVSZWNvcmRJZCI6MTQ1NSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic2ltTW9kZSI6ZmFsc2UsInNyYyI6InByb2QiLCJkZWZhdWx0RW50aXR5VHlwZUlkIjozMiwidXNlcklkIjoxMDA4ODYwODYsImlkZW50aWZpY2F0aW9uTnVtIjoiSloyNzM0MTc0IiwicHVibGljVXNlciI6ZmFsc2UsInJlY29yZElkIjoxNDU1LCJkZWZhdWx0RW50aXR5SWQiOjUyNTQ4MSwiZW50aXRpZXMiOlt7ImVudGl0eU5hbWVBciI6Iti02LHZg9ipINmI2K_Zitin2LEg2KfZhNmF2K_ZitmG2Kkg2YTYrtiv2YXYp9iqINin2YTZhdi52KrZhdix2YrZhiIsImVudGl0eU5hbWVFbiI6IldBRElZQVIgQUwgTUFESU5BSCBGT1IgVU1SQUggU0VSVklDRVMiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjpmYWxzZSwiZW50aXR5SWQiOjUyNTQ4MSwiZW50aXR5VHlwZUlkIjozMiwiZW50aXR5UmVjb3JkSWQiOjE0NTUsInBlcm1pc3Npb25zIjpbXSwiY2FuQmVBY3RpdmF0ZWQiOmZhbHNlLCJlbnRpdHlUeXBlTmFtZUFyIjoi2LTYsdmD2KfYqiDYp9mE2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoiVW1lcmFoIGNvbXBheSIsInNlYXNvbiI6bnVsbCwidXNlcklzQWN0aXZlT25FbnRpdHkiOnRydWUsImFjdGl2ZUVudGl0eUZsYWciOnRydWUsImVudGl0eUV4cGlyZWRGbGFnIjpmYWxzZSwidXNlcklkIjoxMDA4ODYwODYsInNpbU1vZGUiOmZhbHNlLCJub3RlcyI6bnVsbCwiYWxsb3dlZEFyZWFzIjpudWxsfSx7ImVudGl0eU5hbWVBciI6Itil2YbYtdin2YEg2YTYrtiv2YXYp9iqINin2YTYrdisINin2YTYrtin2LXYqSDYp9mE2YXYrdiv2YjYr9ipIiwiZW50aXR5TmFtZUVuIjoiSU5TQUYgSEFKSiBTRVJWSUNFUyBQUklWQVRFIExJTUlURUQiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjp0cnVlLCJlbnRpdHlJZCI6NzE0MjA5LCJlbnRpdHlUeXBlSWQiOjUyLCJlbnRpdHlSZWNvcmRJZCI6MTI0NjAyLCJwZXJtaXNzaW9ucyI6W10sImNhbkJlQWN0aXZhdGVkIjpmYWxzZSwiZW50aXR5VHlwZU5hbWVBciI6ItmI2YPZitmEINiu2KfYsdis2Yog2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoidW1yYWggZXh0ZXJuYWwgYWdlbnQiLCJzZWFzb24iOm51bGwsInVzZXJJc0FjdGl2ZU9uRW50aXR5Ijp0cnVlLCJhY3RpdmVFbnRpdHlGbGFnIjp0cnVlLCJlbnRpdHlFeHBpcmVkRmxhZyI6ZmFsc2UsInVzZXJJZCI6MTAwODg2MDg2LCJzaW1Nb2RlIjpmYWxzZSwibm90ZXMiOm51bGwsImFsbG93ZWRBcmVhcyI6bnVsbH1dLCJuYW1lIjoiUk9NQU4gVUxMQUggU0hBS0lSIFVMTEFIIiwidXNlclR5cGUiOjMsInRva2VuVHlwZSI6MywiVFJBTlNBQ1RJT05fSUQiOiI0OGNiZWI4Yi1mMDEzLTRlZmItYmJmYy1jZDY2YWRhMmRiYjUiLCJqdGkiOiJ6dFlDQXRGUGU1Iiwic3ViIjoiaW5zYWZoYWpqc3BsQGdtYWlsLmNvbSIsImlhdCI6MTc1NTM0NzM5NiwiZXhwIjoxNzU1MzUzMzk2fQ.T4KxruVLp4fRP9X8C44_g_TD60mgUkm9FIkXOtzWXPmLZZUj22b82fsPqu1xwUIVGAwdp5oea20IflHG5IfDlw",
             "entity_id": "714209",
             "active_entity_id": "714209",
             "active_entity_type_id": "52",
@@ -191,8 +268,12 @@ class PassportProcessor(QThread):
         }
         self.processed_folder = os.path.join(os.getcwd(), "processed_passports")
         self.under_age_folder = os.path.join(os.getcwd(), "under_age_passports")
+        self.error_folder = os.path.join(os.getcwd(), "error_passports")
         self.mutamer_ids = []
         self.should_stop_processing = False
+        self.processed_count = 0
+        self.error_count = 0
+        self.under_age_count = 0
         
         # Configure Gemini API with user's API key from Google Sheets
         user_api_key = self.user_data.get('api_key') if self.user_data else None
@@ -220,6 +301,8 @@ class PassportProcessor(QThread):
             os.makedirs(self.processed_folder)
         if not os.path.exists(self.under_age_folder):
             os.makedirs(self.under_age_folder)
+        if not os.path.exists(self.error_folder):
+            os.makedirs(self.error_folder)
         
         # Set up common headers with extracted token data
         self.headers = {
@@ -288,10 +371,29 @@ class PassportProcessor(QThread):
             self.log_signal.emit(f"Warning: Could not move under-age file {file_path}: {str(e)}")
             return False
     
+    def move_error_file(self, file_path, error_message):
+        """Move error passport to separate folder"""
+        try:
+            filename = os.path.basename(file_path)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Clean error message for filename (remove special characters)
+            error_part = re.sub(r'[^\w\s-]', '', error_message.replace(' ', '_'))[:50]
+            
+            new_filename = f"{timestamp}_ERROR_{error_part}_{filename}"
+            destination = os.path.join(self.error_folder, new_filename)
+            shutil.move(file_path, destination)
+            self.log_signal.emit(f"Moved error passport to: {destination}")
+            return True
+        except Exception as e:
+            self.log_signal.emit(f"Warning: Could not move error file {file_path}: {str(e)}")
+            return False
+    
     def run(self):
         try:
             self.log_signal.emit("Starting passport processing with API requests...")
-            
+            self.log_signal.emit("Note: Any passport files with errors will be automatically moved to 'error_passports' folder for re-processing later.")
+            self.log_signal.emit("")  # Empty line for readability
             # Process each passport
             total_passports = len(self.passport_files)
             for i, passport_file in enumerate(self.passport_files):
@@ -305,6 +407,7 @@ class PassportProcessor(QThread):
                     
                     # Extract data using Gemini
                     passport_data = self.extract_passport_data(passport_file)
+                    print(passport_data)
                     if not passport_data:
                         self.log_signal.emit(f"Failed to extract data from {os.path.basename(passport_file)}")
                         continue
@@ -318,10 +421,11 @@ class PassportProcessor(QThread):
                         if age is not None:
                             self.log_signal.emit(f"Calculated age: {age} years")
                             
-                            if age < 1:
+                            if age < 0:
                                 self.log_signal.emit(f"UNDER-AGE DETECTED: Person is {age} years old (under 18). Moving to under-age folder.")
                                 if self.move_under_age_file(passport_file, passport_data):
                                     # Update progress and continue to next passport
+                                    self.under_age_count += 1
                                     progress = int((i + 1) / total_passports * 100)
                                     self.progress_signal.emit(progress)
                                     continue
@@ -343,6 +447,7 @@ class PassportProcessor(QThread):
                     progress = int((i + 1) / total_passports * 100)
                     self.progress_signal.emit(progress)
                     
+                    self.processed_count += 1
                     self.log_signal.emit(f"Successfully processed {os.path.basename(passport_file)}")
                     
                 except requests.exceptions.HTTPError as e:
@@ -352,7 +457,10 @@ class PassportProcessor(QThread):
                         self.should_stop_processing = True
                         break
                     else:
-                        self.error_signal.emit(f"HTTP Error processing {os.path.basename(passport_file)}: {str(e)}")
+                        error_msg = f"HTTP Error {e.response.status_code}: {str(e)}"
+                        self.log_signal.emit(f"Error processing {os.path.basename(passport_file)}: {error_msg}")
+                        self.move_error_file(passport_file, error_msg)
+                        self.error_count += 1
                         continue
                 except Exception as e:
                     error_msg = str(e)
@@ -362,7 +470,9 @@ class PassportProcessor(QThread):
                         self.should_stop_processing = True
                         break
                     else:
-                        self.error_signal.emit(f"Error processing {os.path.basename(passport_file)}: {error_msg}")
+                        self.log_signal.emit(f"Error processing {os.path.basename(passport_file)}: {error_msg}")
+                        self.move_error_file(passport_file, error_msg)
+                        self.error_count += 1
                         continue
             
             # Handle group creation if requested
@@ -370,7 +480,22 @@ class PassportProcessor(QThread):
                 self.log_signal.emit(f"\nCreating group '{self.group_name}' with {len(self.mutamer_ids)} mutamers...")
                 self.create_group_api()
             
-            self.log_signal.emit(f"\nCompleted processing all {total_passports} passports!")
+            # Show processing summary
+            self.log_signal.emit(f"\n" + "="*50)
+            self.log_signal.emit(f"PROCESSING SUMMARY:")
+            self.log_signal.emit(f"Total passports: {total_passports}")
+            self.log_signal.emit(f"Successfully processed: {self.processed_count}")
+            self.log_signal.emit(f"Under-age (moved): {self.under_age_count}")
+            self.log_signal.emit(f"Errors (moved to error folder): {self.error_count}")
+            if self.error_count > 0:
+                self.log_signal.emit(f"Error passports moved to: {self.error_folder}")
+                self.log_signal.emit(f"You can fix issues and re-run the error passports.")
+            self.log_signal.emit(f"="*50)
+            
+            if self.processed_count > 0:
+                self.log_signal.emit(f"\n✅ Successfully completed processing {self.processed_count} passports!")
+            else:
+                self.log_signal.emit(f"\n⚠️ No passports were processed successfully.")
             
         except Exception as e:
             self.error_signal.emit(f"Critical error: {str(e)}")
@@ -391,8 +516,8 @@ class PassportProcessor(QThread):
         "document_type": "passport",
         "country": "",
         "passport_number": "",
-        "first_name": "",
-        "last_name": "",
+        "first_name": "",         // remove any special characters 
+        "last_name": "",           // remove any special characters 
         "arabic_first_name": "",  // Convert English name to Arabic
         "arabic_last_name": "",  // Convert English name to Arabic
         "date_of_birth": "",
@@ -406,9 +531,9 @@ class PassportProcessor(QThread):
         "cnic_number": "",       // Computerized National Identity Card number if available
         "tracking_number": "",   // Tracking number if available
         "booklet_number": "",    // Booklet number if available
-        "husband_name": "",      // If "Husband Name" field contains husband name
+        "husband_name": "",      // If "Husband Name" field contains husband name. // remove any special characters  
         "husband_arabic_name": "",  // Convert English name to Arabic
-        "father_name": "",       // If "Father Name" field contains father name
+        "father_name": "",       // If "Father Name" field contains father name. // remove any special characters
         "father_arabic_name": "",   // Convert English name to Arabic
         "married": ""            // True if husband name exists, False if father name exists
         }
@@ -431,7 +556,7 @@ class PassportProcessor(QThread):
                 response_text = response_text[:-3]
             
             response_text = response_text.replace('`', '').strip()
-            print(f"Extracted response: {response_text}")  # Debug log
+            #print(f"Extracted response: {response_text}")  # Debug log
             return json.loads(response_text)
             
         except Exception as e:
@@ -446,14 +571,23 @@ class PassportProcessor(QThread):
             scanned_data = self.scan_passport_api(image_path)
             if not scanned_data:
                 return None
-            
             # Step 2: Submit initial passport info
             self.log_signal.emit("Step 2: Submitting passport information...")
             initial_response = self.submit_initial_info_api(scanned_data,passport_data)
             mutamer_id = initial_response["response"]["data"]["id"]
+            # Step 3: Look up companion ID if this passport has a companion mapping
+            companion_id = None
+            if image_path in self.companion_mappings:
+                companion_passport_number = self.companion_mappings[image_path]
+                self.log_signal.emit(f"Looking up companion for passport: {companion_passport_number}")
+                companion_id = self.find_companion_id_by_passport(companion_passport_number, mutamer_id)
+                if companion_id:
+                    self.log_signal.emit(f"Found companion ID: {companion_id}")
+                else:
+                    self.log_signal.emit(f"Warning: Could not find companion with passport number: {companion_passport_number}")
             
-            # Step 3: Upload additional documents
-            self.log_signal.emit("Step 3: Uploading additional documents...")
+            # Step 4: Upload additional documents
+            self.log_signal.emit("Step 4: Uploading additional documents...")
             
             # Use separate Iqama image if checkbox is checked and image is provided
             if use_separate_iqama and iqama_image_path:
@@ -465,12 +599,12 @@ class PassportProcessor(QThread):
                 
             vaccine_data = self.upload_attachment_api(image_path, 3)  # Vaccine certificate
             
-            # Step 4: Submit full personal info
-            self.log_signal.emit("Step 4: Submitting personal and contact information...")
-            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number)
+            # Step 5: Submit full personal info (with companion ID if available)
+            self.log_signal.emit("Step 5: Submitting personal and contact information...")
+            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number, companion_id)
             
-            # Step 5: Submit disclosure form
-            self.log_signal.emit("Step 5: Submitting disclosure form...")
+            # Step 6: Submit disclosure form
+            self.log_signal.emit("Step 6: Submitting disclosure form...")
             self.submit_disclosure_api(mutamer_id)
             
             return mutamer_id
@@ -607,7 +741,7 @@ class PassportProcessor(QThread):
         except Exception as e:
             raise Exception(f"Failed to upload attachment: {str(e)}")
     
-    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None):
+    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None, companion_id=None):
         """Step 3: Submit full personal and contact information"""
         passport = scanned_data["response"]["data"]["passportResponse"]
         
@@ -705,6 +839,12 @@ class PassportProcessor(QThread):
             "birthCityName": personal_data.get("city")
         }
         
+        # Add companion ID if provided
+        if companion_id:
+            payload["companionId"] = companion_id
+            payload["relativeRelationId"]="1"
+            self.log_signal.emit(f"Adding companion ID: {companion_id}")
+        
         url = "https://masar.nusuk.sa/umrah/groups_apis/api/Mutamer/SubmitPersonalAndContactInfos"
         headers = self.headers.copy()
         headers["Content-Type"] = "application/json"
@@ -789,6 +929,64 @@ class PassportProcessor(QThread):
                 raise Exception(f"HTTP {e.response.status_code}: {e.response.text}")
         except Exception as e:
             raise Exception(f"Failed to submit disclosure form: {str(e)}")
+    
+    def get_mutamer_companions(self, mutamer_id):
+        """Get list of companions for a mutamer and find companion ID by passport number"""
+        try:
+            url = "https://masar.nusuk.sa/umrah/groups_apis/api/Mutamer/GetListOfMutamerCompanions"
+            headers = self.headers.copy()
+            headers["Content-Type"] = "application/json"
+            
+            payload = {"id": mutamer_id}
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 401:
+                raise requests.exceptions.HTTPError("401 Unauthorized - Invalid authentication token", response=response)
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.Timeout:
+            raise Exception("Request timeout - API server is not responding")
+        except requests.exceptions.ConnectionError:
+            raise Exception("Connection error - Unable to connect to API server")
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise e  # Re-raise 401 errors to be handled by main loop
+            else:
+                raise Exception(f"HTTP {e.response.status_code}: {e.response.text}")
+        except Exception as e:
+            raise Exception(f"Failed to get mutamer companions: {str(e)}")
+    
+    def find_companion_id_by_passport(self, companion_passport_number, mutamer_id):
+        """Find companion ID by passport number"""
+        try:
+            self.log_signal.emit(f"Looking up companion with passport number: {companion_passport_number}")
+            
+            # Get companions list
+            companions_response = self.get_mutamer_companions(mutamer_id)
+            
+            if not companions_response.get("response", {}).get("status"):
+                self.log_signal.emit("Failed to get companions list")
+                return None
+            
+            companions = companions_response.get("response", {}).get("data", {}).get("companions", [])
+            
+            # Find companion by passport number
+            for companion in companions:
+                if companion.get("passportNumber") == companion_passport_number:
+                    companion_id = companion.get("id")
+                    companion_name = companion.get("name", {}).get("en", "Unknown")
+                    self.log_signal.emit(f"Found companion: {companion_name} (ID: {companion_id})")
+                    return companion_id
+            
+            self.log_signal.emit(f"No companion found with passport number: {companion_passport_number}")
+            return None
+            
+        except Exception as e:
+            self.log_signal.emit(f"Error finding companion: {str(e)}")
+            return None
     
     def move_processed_file(self, file_path):
         try:
@@ -887,9 +1085,10 @@ class PassportGUI(QMainWindow):
         self.token_extractor = TokenExtractor()
         self.user_data = None  # Store authenticated user data
         self.auth_manager = None  # Authentication manager
+        self.companion_mappings = {}  # Store companion mappings: {passport_file: companion_passport_number}
         
-        # Initialize updater
-        self.updater = create_updater(self)
+        # Initialize auto-updater
+        self.updater = AutoUpdater(parent_widget=self)
         
         # Show login dialog first
         if not self.authenticate_user():
@@ -897,9 +1096,8 @@ class PassportGUI(QMainWindow):
         
         self.initUI()
         
-        # Check for updates after UI is ready
-        if config.AUTO_CHECK_UPDATES and self.updater.should_check_for_updates():
-            QTimer.singleShot(2000, self.check_for_updates_startup)  # Delay to let UI load
+        # Check for updates after UI is initialized
+        self.check_for_updates_on_startup()
     
     def authenticate_user(self):
         """Show login dialog and authenticate user"""
@@ -916,77 +1114,8 @@ class PassportGUI(QMainWindow):
         else:
             return False
     
-    def create_menu_bar(self):
-        """Create the application menu bar"""
-        menubar = self.menuBar()
-        
-        # File menu
-        file_menu = menubar.addMenu('File')
-        
-        # Exit action
-        exit_action = QAction('Exit', self)
-        exit_action.setShortcut('Ctrl+Q')
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-        
-        # Help menu
-        help_menu = menubar.addMenu('Help')
-        
-        # Check for updates action
-        update_action = QAction('Check for Updates...', self)
-        update_action.triggered.connect(self.check_for_updates_manual)
-        help_menu.addAction(update_action)
-        
-        # About action
-        about_action = QAction('About', self)
-        about_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(about_action)
-    
-    def check_for_updates_startup(self):
-        """Check for updates at startup (silent)"""
-        try:
-            self.log_message("Checking for updates...")
-            result = self.updater.check_for_updates(manual_check=False)
-            if result == "no_update":
-                self.log_message("✓ You are running the latest version")
-            elif result == "skipped":
-                self.log_message("Update available but was previously skipped")
-            elif result == "error":
-                self.log_message("Unable to check for updates")
-        except Exception as e:
-            self.log_message(f"Update check failed: {str(e)}")
-    
-    def check_for_updates_manual(self):
-        """Check for updates manually (shows dialogs)"""
-        try:
-            self.log_message("Manually checking for updates...")
-            result = self.updater.check_for_updates(manual_check=True)
-            if result in ["installing", "later", "skipped"]:
-                self.log_message(f"Update check completed: {result}")
-        except Exception as e:
-            self.log_message(f"Manual update check failed: {str(e)}")
-            QMessageBox.critical(self, "Update Error", f"Failed to check for updates:\n{str(e)}")
-    
-    def show_about_dialog(self):
-        """Show about dialog"""
-        about_text = f"""
-        <h3>{config.APP_NAME}</h3>
-        <p><b>Version:</b> {config.VERSION}</p>
-        <p><b>Description:</b> Automated passport processing application for Saudi Arabia Umrah services.</p>
-        <p><b>Features:</b></p>
-        <ul>
-            <li>Automated passport OCR and data extraction</li>
-            <li>API integration with Masar system</li>
-            <li>Group management and creation</li>
-            <li>Automatic updates from GitHub releases</li>
-        </ul>
-        <p><b>Support:</b> Contact your administrator for technical support.</p>
-        """
-        
-        QMessageBox.about(self, "About", about_text)
-    
     def initUI(self):
-        self.setWindowTitle(f"Saudi Passport Processor v{config.VERSION}")
+        self.setWindowTitle("Saudi Passport Processor")
         self.setGeometry(100, 100, 1000, 500)
         self.setStyleSheet("""
             QMainWindow {
@@ -1073,12 +1202,12 @@ class PassportGUI(QMainWindow):
             }
         """)
         
-        # Create menu bar
-        self.create_menu_bar()
-        
         # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
+        
+        # Create menu bar
+        self.create_menu_bar()
         
         # Main layout
         main_layout = QHBoxLayout(central_widget)
@@ -1238,6 +1367,34 @@ class PassportGUI(QMainWindow):
         
         left_layout.addWidget(iqama_frame)
         
+        # Child companion section
+        companion_frame = QFrame()
+        companion_layout = QVBoxLayout(companion_frame)
+        companion_layout.setContentsMargins(0, 10, 0, 0)
+        
+        self.companion_checkbox = QCheckBox("Enable Child Companion Mapping")
+        self.companion_checkbox.setStyleSheet("margin-top: 20px; font-weight: bold;")
+        self.companion_checkbox.setToolTip("Check this box to map child passports to their companion's passport numbers.\nThis is useful when processing children who need to be linked to their adult companions.")
+        self.companion_checkbox.toggled.connect(self.toggle_companion_options)
+        companion_layout.addWidget(self.companion_checkbox)
+        
+        # Companion mapping button (initially hidden)
+        self.companion_mapping_btn = QPushButton("Set Companion Mappings")
+        self.companion_mapping_btn.setStyleSheet("background-color: #673AB7; font-size: 12px; padding: 8px;")
+        self.companion_mapping_btn.clicked.connect(self.show_companion_mapping_dialog)
+        self.companion_mapping_btn.setVisible(False)
+        self.companion_mapping_btn.setToolTip("Click to map each child passport to their companion's passport number")
+        
+        # Companion status label (initially hidden)
+        self.companion_status_label = QLabel("No companion mappings set")
+        self.companion_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 5px;")
+        self.companion_status_label.setVisible(False)
+        
+        companion_layout.addWidget(self.companion_mapping_btn)
+        companion_layout.addWidget(self.companion_status_label)
+        
+        left_layout.addWidget(companion_frame)
+        
         # Group creation section
         group_frame = QFrame()
         group_layout = QVBoxLayout(group_frame)
@@ -1289,6 +1446,12 @@ class PassportGUI(QMainWindow):
         logs_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #2c3e50; margin-bottom: 10px;")
         right_layout.addWidget(logs_label)
         
+        # Info about error handling
+        info_label = QLabel("ℹ️ Error passports are automatically moved to 'error_passports' folder for re-processing")
+        info_label.setStyleSheet("color: #666; font-size: 10px; margin-bottom: 10px; font-style: italic;")
+        info_label.setWordWrap(True)
+        right_layout.addWidget(info_label)
+        
         # Logs text area
         self.logs_text = QTextEdit()
         self.logs_text.setReadOnly(True)
@@ -1302,6 +1465,97 @@ class PassportGUI(QMainWindow):
         
         return right_frame
     
+    def create_menu_bar(self):
+        """Create menu bar with update options"""
+        menubar = self.menuBar()
+        
+        # Help menu
+        help_menu = menubar.addMenu('Help')
+        
+        # Check for updates action
+        check_updates_action = help_menu.addAction('Check for Updates')
+        check_updates_action.triggered.connect(self.manual_check_for_updates)
+        
+        # About action
+        about_action = help_menu.addAction('About')
+        about_action.triggered.connect(self.show_about_dialog)
+        
+        # Settings menu
+        settings_menu = menubar.addMenu('Settings')
+        
+        # Update settings action
+        update_settings_action = settings_menu.addAction('Update Settings')
+        update_settings_action.triggered.connect(self.show_update_settings)
+    
+    def check_for_updates_on_startup(self):
+        """Check for updates when the application starts"""
+        # Use QTimer to delay the check slightly to ensure UI is fully loaded
+        QTimer.singleShot(1000, self._delayed_update_check)
+    
+    def _delayed_update_check(self):
+        """Perform the actual update check"""
+        try:
+            if self.updater.should_check_for_updates():
+                # Run update check in a separate thread to avoid blocking UI
+                self.updater.check_and_update_if_available()
+        except Exception as e:
+            print(f"Error during startup update check: {e}")
+    
+    def manual_check_for_updates(self):
+        """Manually check for updates from menu"""
+        try:
+            self.updater.force_check_for_updates()
+        except Exception as e:
+            QMessageBox.critical(self, "Update Error", f"Failed to check for updates:\n{str(e)}")
+    
+    def show_about_dialog(self):
+        """Show about dialog"""
+        QMessageBox.about(self, "About Saudi Passport Processor", 
+                         f"{config.APP_NAME}\nVersion: {config.VERSION}\n\n"
+                         "Automated passport processing application\n"
+                         "with Google Sheets integration and AI processing.")
+    
+    def show_update_settings(self):
+        """Show update settings dialog"""
+        from PyQt5.QtWidgets import QCheckBox, QSpinBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Settings")
+        dialog.setModal(True)
+        dialog.resize(300, 200)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Auto-update checkbox
+        auto_update_cb = QCheckBox("Enable automatic update checks")
+        auto_update_cb.setChecked(self.updater.settings.get("auto_update", True))
+        layout.addWidget(auto_update_cb)
+        
+        # Check interval
+        interval_label = QLabel("Check for updates every:")
+        layout.addWidget(interval_label)
+        
+        interval_spinbox = QSpinBox()
+        interval_spinbox.setRange(1, 168)  # 1 hour to 1 week
+        interval_spinbox.setValue(self.updater.settings.get("check_interval", 24))
+        interval_spinbox.setSuffix(" hours")
+        layout.addWidget(interval_spinbox)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            # Save settings
+            self.updater.settings["auto_update"] = auto_update_cb.isChecked()
+            self.updater.settings["check_interval"] = interval_spinbox.value()
+            self.updater._save_settings()
+            
+            QMessageBox.information(self, "Settings Saved", 
+                                  "Update settings have been saved successfully.")
+    
     def validate_phone(self, text):
         # Remove all non-digit characters
         cleaned = re.sub(r'[^\d]', '', text)
@@ -1313,6 +1567,43 @@ class PassportGUI(QMainWindow):
         
         self.phone_input.setStyleSheet("QLineEdit { border-color: #f44336; }")
         return False
+    
+    def toggle_companion_options(self, checked):
+        """Show/hide companion options based on checkbox state"""
+        self.companion_mapping_btn.setVisible(checked)
+        self.companion_status_label.setVisible(checked)
+        
+        if not checked:
+            # Clear companion mappings when unchecked
+            self.companion_mappings.clear()
+            self.companion_status_label.setText("No companion mappings set")
+            self.companion_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 5px;")
+    
+    def show_companion_mapping_dialog(self):
+        """Show dialog for mapping companions to child passports"""
+        if not self.passport_files:
+            QMessageBox.warning(self, "Warning", "Please upload passport files first.")
+            return
+        
+        dialog = CompanionMappingDialog(self.passport_files, self)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            self.companion_mappings = dialog.get_companion_mappings()
+            
+            # Update status label
+            if self.companion_mappings:
+                count = len(self.companion_mappings)
+                self.companion_status_label.setText(f"✓ {count} companion mapping(s) set")
+                self.companion_status_label.setStyleSheet("color: #4CAF50; font-size: 10px; margin: 5px;")
+                self.log_message(f"Set {count} companion mappings")
+                
+                # Log the mappings for debugging
+                for passport_file, companion_passport in self.companion_mappings.items():
+                    filename = os.path.basename(passport_file)
+                    self.log_message(f"  {filename} → Companion: {companion_passport}")
+            else:
+                self.companion_status_label.setText("No companion mappings set")
+                self.companion_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 5px;")
     
     def toggle_group_name(self, checked):
         """Show/hide group name input based on checkbox state"""
@@ -1376,7 +1667,11 @@ class PassportGUI(QMainWindow):
         self.iqama_file_label.setText("No Iqama image selected")
         self.iqama_file_label.setStyleSheet("color: #666; font-size: 10px; margin: 5px;")
         self.iqama_number_input.clear()
-        self.log_message("Cleared all passport files and Iqama data")
+        # Clear companion mappings
+        self.companion_mappings.clear()
+        self.companion_status_label.setText("No companion mappings set")
+        self.companion_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 5px;")
+        self.log_message("Cleared all passport files, Iqama data, and companion mappings")
     
     def clear_logs(self):
         self.logs_text.clear()
@@ -1396,10 +1691,10 @@ class PassportGUI(QMainWindow):
             
             # Use hardcoded tokens (temporary - replace with actual extraction later)
             self.token_data = {
-                "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJwdWJsaWNVc2VyIjpmYWxzZSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic3JjIjoicHJvZCIsIm5hbWUiOiJST01BTiBVTExBSCBTSEFLSVIgVUxMQUgiLCJ1c2VyVHlwZSI6MywidG9rZW5UeXBlIjo1LCJ1c2VySWQiOjEwMDg4NjA4NiwiVFJBTlNBQ1RJT05fSUQiOiJmZDk4MDEyMC0yMWFlLTQ1NDUtYmI2ZC05NWMxNTRlYWUzZTQiLCJqdGkiOiJNRldkeFJiblNrIiwiaWRlbnRpZmljYXRpb25OdW0iOiJKWjI3MzQxNzQiLCJzdWIiOiJpbnNhZmhhampzcGxAZ21haWwuY29tIiwiaWF0IjoxNzU1MjgwNDM0LCJleHAiOjE3NTUyODY0MzR9.WyfT3ZartsGNDknxLSCBsUJysRRvfQ1MBUFnJchpEdwnvsmFmmJ3UTRSrQ9oE4jjD3jrekvKN0-ZQOAvBl5RIQ",
+                "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJhY3RpdmVSZWNvcmRJZCI6MTQ1NSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic2ltTW9kZSI6ZmFsc2UsInNyYyI6InByb2QiLCJkZWZhdWx0RW50aXR5VHlwZUlkIjozMiwidXNlcklkIjoxMDA4ODYwODYsImlkZW50aWZpY2F0aW9uTnVtIjoiSloyNzM0MTc0IiwicHVibGljVXNlciI6ZmFsc2UsInJlY29yZElkIjoxNDU1LCJkZWZhdWx0RW50aXR5SWQiOjUyNTQ4MSwiZW50aXRpZXMiOlt7ImVudGl0eU5hbWVBciI6Iti02LHZg9ipINmI2K_Zitin2LEg2KfZhNmF2K_ZitmG2Kkg2YTYrtiv2YXYp9iqINin2YTZhdi52KrZhdix2YrZhiIsImVudGl0eU5hbWVFbiI6IldBRElZQVIgQUwgTUFESU5BSCBGT1IgVU1SQUggU0VSVklDRVMiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjpmYWxzZSwiZW50aXR5SWQiOjUyNTQ4MSwiZW50aXR5VHlwZUlkIjozMiwiZW50aXR5UmVjb3JkSWQiOjE0NTUsInBlcm1pc3Npb25zIjpbXSwiY2FuQmVBY3RpdmF0ZWQiOmZhbHNlLCJlbnRpdHlUeXBlTmFtZUFyIjoi2LTYsdmD2KfYqiDYp9mE2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoiVW1lcmFoIGNvbXBheSIsInNlYXNvbiI6bnVsbCwidXNlcklzQWN0aXZlT25FbnRpdHkiOnRydWUsImFjdGl2ZUVudGl0eUZsYWciOnRydWUsImVudGl0eUV4cGlyZWRGbGFnIjpmYWxzZSwidXNlcklkIjoxMDA4ODYwODYsInNpbU1vZGUiOmZhbHNlLCJub3RlcyI6bnVsbCwiYWxsb3dlZEFyZWFzIjpudWxsfSx7ImVudGl0eU5hbWVBciI6Itil2YbYtdin2YEg2YTYrtiv2YXYp9iqINin2YTYrdisINin2YTYrtin2LXYqSDYp9mE2YXYrdiv2YjYr9ipIiwiZW50aXR5TmFtZUVuIjoiSU5TQUYgSEFKSiBTRVJWSUNFUyBQUklWQVRFIExJTUlURUQiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjp0cnVlLCJlbnRpdHlJZCI6NzE0MjA5LCJlbnRpdHlUeXBlSWQiOjUyLCJlbnRpdHlSZWNvcmRJZCI6MTI0NjAyLCJwZXJtaXNzaW9ucyI6W10sImNhbkJlQWN0aXZhdGVkIjpmYWxzZSwiZW50aXR5VHlwZU5hbWVBciI6ItmI2YPZitmEINiu2KfYsdis2Yog2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoidW1yYWggZXh0ZXJuYWwgYWdlbnQiLCJzZWFzb24iOm51bGwsInVzZXJJc0FjdGl2ZU9uRW50aXR5Ijp0cnVlLCJhY3RpdmVFbnRpdHlGbGFnIjp0cnVlLCJlbnRpdHlFeHBpcmVkRmxhZyI6ZmFsc2UsInVzZXJJZCI6MTAwODg2MDg2LCJzaW1Nb2RlIjpmYWxzZSwibm90ZXMiOm51bGwsImFsbG93ZWRBcmVhcyI6bnVsbH1dLCJuYW1lIjoiUk9NQU4gVUxMQUggU0hBS0lSIFVMTEFIIiwidXNlclR5cGUiOjMsInRva2VuVHlwZSI6MywiVFJBTlNBQ1RJT05fSUQiOiI0OGNiZWI4Yi1mMDEzLTRlZmItYmJmYy1jZDY2YWRhMmRiYjUiLCJqdGkiOiJ6dFlDQXRGUGU1Iiwic3ViIjoiaW5zYWZoYWpqc3BsQGdtYWlsLmNvbSIsImlhdCI6MTc1NTM0NzM5NiwiZXhwIjoxNzU1MzUzMzk2fQ.T4KxruVLp4fRP9X8C44_g_TD60mgUkm9FIkXOtzWXPmLZZUj22b82fsPqu1xwUIVGAwdp5oea20IflHG5IfDlw",
                 "entity_id": "714209",
                 "active_entity_id": "714209",
-                "active_entity_type_id": None,
+                "active_entity_type_id": 52,
                 "contract_id": "218329",
             }
             
@@ -1479,6 +1774,28 @@ class PassportGUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please enter a group name.")
             return
         
+        # Validate companion mappings if checkbox is checked
+        if self.companion_checkbox.isChecked():
+            if not self.companion_mappings:
+                reply = QMessageBox.question(
+                    self,
+                    "No Companion Mappings",
+                    "Child companion mapping is enabled but no mappings are set.\n\n"
+                    "Do you want to:\n"
+                    "• Yes: Set mappings now\n"
+                    "• No: Continue without companion mappings\n"
+                    "• Cancel: Stop and review settings",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                )
+                
+                if reply == QMessageBox.Yes:
+                    self.show_companion_mapping_dialog()
+                    if not self.companion_mappings:
+                        return  # User cancelled the dialog
+                elif reply == QMessageBox.Cancel:
+                    return
+                # If No, continue without mappings (companion_mappings will be empty)
+        
         # Check authentication
         if not self.token_data or not self.token_data.get("bearer_token"):
             QMessageBox.warning(
@@ -1504,7 +1821,8 @@ class PassportGUI(QMainWindow):
             self.user_data,  # Pass user data to processor
             self.iqama_checkbox.isChecked(),  # Use separate Iqama
             self.iqama_image_path,  # Iqama image path
-            self.iqama_number_input.text().strip() if self.iqama_checkbox.isChecked() else None  # Iqama number
+            self.iqama_number_input.text().strip() if self.iqama_checkbox.isChecked() else None,  # Iqama number
+            self.companion_mappings.copy() if self.companion_checkbox.isChecked() else {}  # Companion mappings
         )
         
         self.processor.log_signal.connect(self.log_message)
@@ -1513,12 +1831,17 @@ class PassportGUI(QMainWindow):
         self.processor.finished_signal.connect(self.processing_finished)
         
         self.processor.start()
-        self.log_message("Started passport processing...")
+        
+        # Log companion mapping info
+        if self.companion_checkbox.isChecked() and self.companion_mappings:
+            self.log_message(f"Started passport processing with {len(self.companion_mappings)} companion mappings...")
+        else:
+            self.log_message("Started passport processing...")
     
     def show_error(self, error_message):
         self.log_message(f"ERROR: {error_message}")
         
-        # If it's an authorization error, offer to refresh tokens
+        # Only show pop-up for authorization errors, just log other errors
         if "Authorization failed" in error_message or "401" in error_message:
             # Re-enable the start button so user can try again
             self.start_btn.setEnabled(True)
@@ -1539,8 +1862,7 @@ class PassportGUI(QMainWindow):
             
             if reply == QMessageBox.Yes:
                 self.perform_login()
-        else:
-            QMessageBox.critical(self, "Error", error_message)
+        # For other errors, just log them - no pop-up needed since files are moved to error folder
     
 
     
@@ -1553,7 +1875,25 @@ class PassportGUI(QMainWindow):
             self.log_message("Processing stopped due to authentication error.")
         else:
             self.log_message("Processing completed!")
-            QMessageBox.information(self, "Success", "All passports have been processed successfully!")
+            # Show more detailed completion message
+            if hasattr(self.processor, 'processed_count') and hasattr(self.processor, 'error_count'):
+                total_files = len(self.processor.passport_files)
+                processed = self.processor.processed_count
+                errors = self.processor.error_count
+                under_age = getattr(self.processor, 'under_age_count', 0)
+                
+                if errors > 0:
+                    QMessageBox.information(self, "Processing Complete", 
+                        f"Processing completed!\n\n"
+                        f"Successfully processed: {processed} passports\n"
+                        f"Under-age moved: {under_age} passports\n"
+                        f"Errors (moved to error folder): {errors} passports\n\n"
+                        f"Check the error_passports folder to re-process failed files.")
+                else:
+                    QMessageBox.information(self, "Success", 
+                        f"All {processed} passports processed successfully!")
+            else:
+                QMessageBox.information(self, "Success", "Processing completed!")
 
     def logout_user(self):
         """Logout current user and show login dialog"""
