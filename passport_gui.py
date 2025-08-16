@@ -228,7 +228,6 @@ class TokenExtractor:
 
                 # Extract tokens
                 extracted = self.extract_fields(logs_file_path)
-                
                 # Clean up log file
                 if os.path.exists(logs_file_path):
                     os.remove(logs_file_path)
@@ -258,14 +257,8 @@ class PassportProcessor(QThread):
         self.iqama_image_path = iqama_image_path
         self.iqama_number = iqama_number
         self.companion_mappings = companion_mappings or {}  # Store companion mappings
-        # Hardcoded token data - replace with actual values later
-        self.token_data = {
-            "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJhY3RpdmVSZWNvcmRJZCI6MTQ1NSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic2ltTW9kZSI6ZmFsc2UsInNyYyI6InByb2QiLCJkZWZhdWx0RW50aXR5VHlwZUlkIjozMiwidXNlcklkIjoxMDA4ODYwODYsImlkZW50aWZpY2F0aW9uTnVtIjoiSloyNzM0MTc0IiwicHVibGljVXNlciI6ZmFsc2UsInJlY29yZElkIjoxNDU1LCJkZWZhdWx0RW50aXR5SWQiOjUyNTQ4MSwiZW50aXRpZXMiOlt7ImVudGl0eU5hbWVBciI6Iti02LHZg9ipINmI2K_Zitin2LEg2KfZhNmF2K_ZitmG2Kkg2YTYrtiv2YXYp9iqINin2YTZhdi52KrZhdix2YrZhiIsImVudGl0eU5hbWVFbiI6IldBRElZQVIgQUwgTUFESU5BSCBGT1IgVU1SQUggU0VSVklDRVMiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjpmYWxzZSwiZW50aXR5SWQiOjUyNTQ4MSwiZW50aXR5VHlwZUlkIjozMiwiZW50aXR5UmVjb3JkSWQiOjE0NTUsInBlcm1pc3Npb25zIjpbXSwiY2FuQmVBY3RpdmF0ZWQiOmZhbHNlLCJlbnRpdHlUeXBlTmFtZUFyIjoi2LTYsdmD2KfYqiDYp9mE2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoiVW1lcmFoIGNvbXBheSIsInNlYXNvbiI6bnVsbCwidXNlcklzQWN0aXZlT25FbnRpdHkiOnRydWUsImFjdGl2ZUVudGl0eUZsYWciOnRydWUsImVudGl0eUV4cGlyZWRGbGFnIjpmYWxzZSwidXNlcklkIjoxMDA4ODYwODYsInNpbU1vZGUiOmZhbHNlLCJub3RlcyI6bnVsbCwiYWxsb3dlZEFyZWFzIjpudWxsfSx7ImVudGl0eU5hbWVBciI6Itil2YbYtdin2YEg2YTYrtiv2YXYp9iqINin2YTYrdisINin2YTYrtin2LXYqSDYp9mE2YXYrdiv2YjYr9ipIiwiZW50aXR5TmFtZUVuIjoiSU5TQUYgSEFKSiBTRVJWSUNFUyBQUklWQVRFIExJTUlURUQiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjp0cnVlLCJlbnRpdHlJZCI6NzE0MjA5LCJlbnRpdHlUeXBlSWQiOjUyLCJlbnRpdHlSZWNvcmRJZCI6MTI0NjAyLCJwZXJtaXNzaW9ucyI6W10sImNhbkJlQWN0aXZhdGVkIjpmYWxzZSwiZW50aXR5VHlwZU5hbWVBciI6ItmI2YPZitmEINiu2KfYsdis2Yog2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoidW1yYWggZXh0ZXJuYWwgYWdlbnQiLCJzZWFzb24iOm51bGwsInVzZXJJc0FjdGl2ZU9uRW50aXR5Ijp0cnVlLCJhY3RpdmVFbnRpdHlGbGFnIjp0cnVlLCJlbnRpdHlFeHBpcmVkRmxhZyI6ZmFsc2UsInVzZXJJZCI6MTAwODg2MDg2LCJzaW1Nb2RlIjpmYWxzZSwibm90ZXMiOm51bGwsImFsbG93ZWRBcmVhcyI6bnVsbH1dLCJuYW1lIjoiUk9NQU4gVUxMQUggU0hBS0lSIFVMTEFIIiwidXNlclR5cGUiOjMsInRva2VuVHlwZSI6MywiVFJBTlNBQ1RJT05fSUQiOiI0OGNiZWI4Yi1mMDEzLTRlZmItYmJmYy1jZDY2YWRhMmRiYjUiLCJqdGkiOiJ6dFlDQXRGUGU1Iiwic3ViIjoiaW5zYWZoYWpqc3BsQGdtYWlsLmNvbSIsImlhdCI6MTc1NTM0NzM5NiwiZXhwIjoxNzU1MzUzMzk2fQ.T4KxruVLp4fRP9X8C44_g_TD60mgUkm9FIkXOtzWXPmLZZUj22b82fsPqu1xwUIVGAwdp5oea20IflHG5IfDlw",
-            "entity_id": "714209",
-            "active_entity_id": "714209",
-            "active_entity_type_id": "52",
-            "contract_id": "218329",
-        }
+        # Use extracted token data passed from the GUI
+        self.token_data = token_data
         self.processed_folder = os.path.join(os.getcwd(), "processed_passports")
         self.under_age_folder = os.path.join(os.getcwd(), "under_age_passports")
         self.error_folder = os.path.join(os.getcwd(), "error_passports")
@@ -577,10 +570,11 @@ class PassportProcessor(QThread):
             mutamer_id = initial_response["response"]["data"]["id"]
             # Step 3: Look up companion ID if this passport has a companion mapping
             companion_id = None
+            companion_gender = None
             if image_path in self.companion_mappings:
                 companion_passport_number = self.companion_mappings[image_path]
                 self.log_signal.emit(f"Looking up companion for passport: {companion_passport_number}")
-                companion_id = self.find_companion_id_by_passport(companion_passport_number, mutamer_id)
+                companion_id, companion_gender = self.find_companion_id_by_passport(companion_passport_number, mutamer_id)
                 if companion_id:
                     self.log_signal.emit(f"Found companion ID: {companion_id}")
                 else:
@@ -601,7 +595,7 @@ class PassportProcessor(QThread):
             
             # Step 5: Submit full personal info (with companion ID if available)
             self.log_signal.emit("Step 5: Submitting personal and contact information...")
-            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number, companion_id)
+            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number, companion_id, companion_gender)
             
             # Step 6: Submit disclosure form
             self.log_signal.emit("Step 6: Submitting disclosure form...")
@@ -741,7 +735,7 @@ class PassportProcessor(QThread):
         except Exception as e:
             raise Exception(f"Failed to upload attachment: {str(e)}")
     
-    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None, companion_id=None):
+    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None, companion_id=None, companion_gender=None):
         """Step 3: Submit full personal and contact information"""
         passport = scanned_data["response"]["data"]["passportResponse"]
         
@@ -842,8 +836,20 @@ class PassportProcessor(QThread):
         # Add companion ID if provided
         if companion_id:
             payload["companionId"] = companion_id
-            payload["relativeRelationId"]="1"
-            self.log_signal.emit(f"Adding companion ID: {companion_id}")
+            
+            # Set relationship ID based on companion's gender
+            # 1 = Male companion (brother, father, husband, etc.)
+            # 2 = Female companion (sister, mother, wife, etc.)
+            if companion_gender == 1:  # Male companion
+                payload["relativeRelationId"] = "1"
+                self.log_signal.emit(f"Adding male companion ID: {companion_id} (relativeRelationId: 1)")
+            elif companion_gender == 2:  # Female companion
+                payload["relativeRelationId"] = "2"
+                self.log_signal.emit(f"Adding female companion ID: {companion_id} (relativeRelationId: 2)")
+            else:
+                # Default to 1 if gender is unknown
+                payload["relativeRelationId"] = "1"
+                self.log_signal.emit(f"Adding companion ID: {companion_id} (unknown gender, defaulting relativeRelationId: 1)")
         
         url = "https://masar.nusuk.sa/umrah/groups_apis/api/Mutamer/SubmitPersonalAndContactInfos"
         headers = self.headers.copy()
@@ -960,7 +966,7 @@ class PassportProcessor(QThread):
             raise Exception(f"Failed to get mutamer companions: {str(e)}")
     
     def find_companion_id_by_passport(self, companion_passport_number, mutamer_id):
-        """Find companion ID by passport number"""
+        """Find companion ID and gender by passport number"""
         try:
             self.log_signal.emit(f"Looking up companion with passport number: {companion_passport_number}")
             
@@ -969,7 +975,7 @@ class PassportProcessor(QThread):
             
             if not companions_response.get("response", {}).get("status"):
                 self.log_signal.emit("Failed to get companions list")
-                return None
+                return None, None
             
             companions = companions_response.get("response", {}).get("data", {}).get("companions", [])
             
@@ -977,16 +983,18 @@ class PassportProcessor(QThread):
             for companion in companions:
                 if companion.get("passportNumber") == companion_passport_number:
                     companion_id = companion.get("id")
+                    companion_gender = companion.get("gender")  # 1 = Male, 2 = Female
                     companion_name = companion.get("name", {}).get("en", "Unknown")
-                    self.log_signal.emit(f"Found companion: {companion_name} (ID: {companion_id})")
-                    return companion_id
+                    gender_text = "Male" if companion_gender == 1 else "Female" if companion_gender == 2 else "Unknown"
+                    self.log_signal.emit(f"Found companion: {companion_name} (ID: {companion_id}, Gender: {gender_text})")
+                    return companion_id, companion_gender
             
             self.log_signal.emit(f"No companion found with passport number: {companion_passport_number}")
-            return None
+            return None, None
             
         except Exception as e:
             self.log_signal.emit(f"Error finding companion: {str(e)}")
-            return None
+            return None, None
     
     def move_processed_file(self, file_path):
         try:
@@ -1689,14 +1697,8 @@ class PassportGUI(QMainWindow):
             self.login_btn.setText("Logging in...")
             self.log_message("Starting automatic login process...")
             
-            # Use hardcoded tokens (temporary - replace with actual extraction later)
-            self.token_data = {
-                "bearer_token": "Bearer eyJhbGciOiJIUzUxMiJ9.eyJhY3RpdmVSZWNvcmRJZCI6MTQ1NSwiQ0xJRU5UX0lQIjoiMTAuMS4zOS4yMzQiLCJuYW1lQXIiOiLYsdmI2YXYp9mGINin2YTZhNmHINi02KfZg9ixINin2YTZhNmHIiwic2ltTW9kZSI6ZmFsc2UsInNyYyI6InByb2QiLCJkZWZhdWx0RW50aXR5VHlwZUlkIjozMiwidXNlcklkIjoxMDA4ODYwODYsImlkZW50aWZpY2F0aW9uTnVtIjoiSloyNzM0MTc0IiwicHVibGljVXNlciI6ZmFsc2UsInJlY29yZElkIjoxNDU1LCJkZWZhdWx0RW50aXR5SWQiOjUyNTQ4MSwiZW50aXRpZXMiOlt7ImVudGl0eU5hbWVBciI6Iti02LHZg9ipINmI2K_Zitin2LEg2KfZhNmF2K_ZitmG2Kkg2YTYrtiv2YXYp9iqINin2YTZhdi52KrZhdix2YrZhiIsImVudGl0eU5hbWVFbiI6IldBRElZQVIgQUwgTUFESU5BSCBGT1IgVU1SQUggU0VSVklDRVMiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjpmYWxzZSwiZW50aXR5SWQiOjUyNTQ4MSwiZW50aXR5VHlwZUlkIjozMiwiZW50aXR5UmVjb3JkSWQiOjE0NTUsInBlcm1pc3Npb25zIjpbXSwiY2FuQmVBY3RpdmF0ZWQiOmZhbHNlLCJlbnRpdHlUeXBlTmFtZUFyIjoi2LTYsdmD2KfYqiDYp9mE2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoiVW1lcmFoIGNvbXBheSIsInNlYXNvbiI6bnVsbCwidXNlcklzQWN0aXZlT25FbnRpdHkiOnRydWUsImFjdGl2ZUVudGl0eUZsYWciOnRydWUsImVudGl0eUV4cGlyZWRGbGFnIjpmYWxzZSwidXNlcklkIjoxMDA4ODYwODYsInNpbU1vZGUiOmZhbHNlLCJub3RlcyI6bnVsbCwiYWxsb3dlZEFyZWFzIjpudWxsfSx7ImVudGl0eU5hbWVBciI6Itil2YbYtdin2YEg2YTYrtiv2YXYp9iqINin2YTYrdisINin2YTYrtin2LXYqSDYp9mE2YXYrdiv2YjYr9ipIiwiZW50aXR5TmFtZUVuIjoiSU5TQUYgSEFKSiBTRVJWSUNFUyBQUklWQVRFIExJTUlURUQiLCJsb2dvSWQiOm51bGwsImVudGl0eU93bmVyIjp0cnVlLCJlbnRpdHlJZCI6NzE0MjA5LCJlbnRpdHlUeXBlSWQiOjUyLCJlbnRpdHlSZWNvcmRJZCI6MTI0NjAyLCJwZXJtaXNzaW9ucyI6W10sImNhbkJlQWN0aXZhdGVkIjpmYWxzZSwiZW50aXR5VHlwZU5hbWVBciI6ItmI2YPZitmEINiu2KfYsdis2Yog2LnZhdix2KkiLCJlbnRpdHlUeXBlTmFtZUVuIjoidW1yYWggZXh0ZXJuYWwgYWdlbnQiLCJzZWFzb24iOm51bGwsInVzZXJJc0FjdGl2ZU9uRW50aXR5Ijp0cnVlLCJhY3RpdmVFbnRpdHlGbGFnIjp0cnVlLCJlbnRpdHlFeHBpcmVkRmxhZyI6ZmFsc2UsInVzZXJJZCI6MTAwODg2MDg2LCJzaW1Nb2RlIjpmYWxzZSwibm90ZXMiOm51bGwsImFsbG93ZWRBcmVhcyI6bnVsbH1dLCJuYW1lIjoiUk9NQU4gVUxMQUggU0hBS0lSIFVMTEFIIiwidXNlclR5cGUiOjMsInRva2VuVHlwZSI6MywiVFJBTlNBQ1RJT05fSUQiOiI0OGNiZWI4Yi1mMDEzLTRlZmItYmJmYy1jZDY2YWRhMmRiYjUiLCJqdGkiOiJ6dFlDQXRGUGU1Iiwic3ViIjoiaW5zYWZoYWpqc3BsQGdtYWlsLmNvbSIsImlhdCI6MTc1NTM0NzM5NiwiZXhwIjoxNzU1MzUzMzk2fQ.T4KxruVLp4fRP9X8C44_g_TD60mgUkm9FIkXOtzWXPmLZZUj22b82fsPqu1xwUIVGAwdp5oea20IflHG5IfDlw",
-                "entity_id": "714209",
-                "active_entity_id": "714209",
-                "active_entity_type_id": 52,
-                "contract_id": "218329",
-            }
+            # Extract tokens using the TokenExtractor
+            self.token_data = self.token_extractor.get_tokens_from_browser()
             
             if self.token_data and self.token_data.get("bearer_token"):
                 self.auth_status_label.setText("Status: ✓ Authenticated")
