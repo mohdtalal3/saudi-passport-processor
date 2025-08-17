@@ -499,12 +499,20 @@ class PassportProcessor(QThread):
             self.finished_signal.emit()
     
     def clean_passport_data(self, passport_data):
-        """Remove special characters from English names in passport data"""
+        """Remove special characters from English and Arabic names and strip all fields in passport data"""
         if not passport_data:
             return passport_data
         
-        # Names that need special character removal
-        name_fields = ['first_name', 'last_name', 'husband_name', 'father_name']
+        # First, strip all string fields to remove leading/trailing spaces
+        for key, value in passport_data.items():
+            if isinstance(value, str):
+                passport_data[key] = value.strip()
+        
+        # All name fields that need special character removal (English and Arabic)
+        name_fields = [
+            'first_name', 'last_name', 'husband_name', 'father_name',
+            'arabic_first_name', 'arabic_last_name', 'husband_arabic_name', 'father_arabic_name'
+        ]
         
         for field in name_fields:
             if field in passport_data:
@@ -521,8 +529,15 @@ class PassportProcessor(QThread):
                     passport_data[field] = ""
                     continue
                 
-                # Remove special characters, keep only letters and spaces
-                cleaned_name = re.sub(r'[^A-Za-z\s]', '', field_str)
+                # Remove special characters based on field type
+                if 'arabic' in field:
+                    # For Arabic names: keep Arabic letters, English letters, and spaces
+                    # Remove commas, periods, and other punctuation
+                    cleaned_name = re.sub(r'[^\u0600-\u06FFa-zA-Z\s]', '', field_str)
+                else:
+                    # For English names: keep only English letters and spaces
+                    cleaned_name = re.sub(r'[^A-Za-z\s]', '', field_str)
+                
                 # Remove extra spaces and strip
                 cleaned_name = ' '.join(cleaned_name.split())
                 
@@ -586,11 +601,60 @@ class PassportProcessor(QThread):
             
             response_text = response_text.replace('`', '').strip()
             #print(f"Extracted response: {response_text}")  # Debug log
-            return json.loads(response_text)
+            passport_data = json.loads(response_text)
+            
+            # Strip all fields to remove leading/trailing spaces
+            return self.strip_passport_data(passport_data)
             
         except Exception as e:
             self.log_signal.emit(f"OCR Error: {str(e)}")
             return None
+    
+    def strip_passport_data(self, passport_data):
+        """Strip leading and trailing spaces from all passport data fields"""
+        if not passport_data or not isinstance(passport_data, dict):
+            return passport_data
+        
+        stripped_data = {}
+        for key, value in passport_data.items():
+            if isinstance(value, str):
+                # Strip leading and trailing spaces from string values
+                stripped_data[key] = value.strip()
+            else:
+                # Keep non-string values as they are
+                stripped_data[key] = value
+        
+        return stripped_data
+    
+    def safe_get_stripped(self, data, key, default=""):
+        """Safely get a value from dict and strip it if it's a string"""
+        if not data or not isinstance(data, dict):
+            return default
+        
+        value = data.get(key, default)
+        if value is None:
+            return default
+        
+        return str(value).strip() if isinstance(value, (str, int, float)) else default
+    
+    def strip_nested_data(self, data):
+        """Recursively strip all string fields in nested dictionaries and lists"""
+        if isinstance(data, dict):
+            stripped_dict = {}
+            for key, value in data.items():
+                if isinstance(value, str):
+                    stripped_dict[key] = value.strip()
+                elif isinstance(value, (dict, list)):
+                    stripped_dict[key] = self.strip_nested_data(value)
+                else:
+                    stripped_dict[key] = value
+            return stripped_dict
+        elif isinstance(data, list):
+            return [self.strip_nested_data(item) for item in data]
+        elif isinstance(data, str):
+            return data.strip()
+        else:
+            return data
     
     def process_passport_api(self, image_path, passport_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None):
         """Process passport using API requests instead of selenium"""
@@ -660,7 +724,10 @@ class PassportProcessor(QThread):
                     raise requests.exceptions.HTTPError("401 Unauthorized - Invalid authentication token", response=response)
                 
                 response.raise_for_status()
-                return response.json()
+                scanned_data = response.json()
+                
+                # Strip all string fields from scanned data
+                return self.strip_nested_data(scanned_data)
                 
         except requests.exceptions.Timeout:
             raise Exception("Request timeout - API server is not responding")
@@ -679,20 +746,25 @@ class PassportProcessor(QThread):
         try:
             passport = scanned_data["response"]["data"]["passportResponse"]
             
+            # Helper function to safely get and strip string values
+            def get_stripped(data, key, default=""):
+                value = data.get(key, default)
+                return str(value).strip() if value is not None else default
+            
             payload = {
                 "id": None,
-                "firstName": {"en": passport.get("firstNameEn")},
-                "familyName": {"en": passport.get("familyNameEn")},
+                "firstName": {"en": get_stripped(passport, "firstNameEn")},
+                "familyName": {"en": get_stripped(passport, "familyNameEn")},
                 "previousNationalityId": None,
                 "gender": passport.get("gender"),
                 "passportTypeId": 1,
-                "birthDate": passport.get("birthDate"),
-                "passportExpiryDate": passport.get("passportExpiryDate"),
-                "passportIssueDate": passport.get("passportIssueDate"),
+                "birthDate": get_stripped(passport, "birthDate"),
+                "passportExpiryDate": get_stripped(passport, "passportExpiryDate"),
+                "passportIssueDate": get_stripped(passport, "passportIssueDate"),
                 "nationalityId": passport.get("nationalityId"),
                 "issueCountryId": passport.get("countryId"),
-                "passportNumber": passport.get("passportNumber"),
-                "issueCityName": passport_data.get("city") or "".strip(),
+                "passportNumber": get_stripped(passport, "passportNumber"),
+                "issueCityName": get_stripped(passport_data, "city"),
                 "personalPicture": None,
                 "passportImage": {
                     "fileName": passport["passportImage"]["fileName"],
@@ -824,12 +896,12 @@ class PassportProcessor(QThread):
         last_name_en = re.sub(r"[^A-Za-z\s]", "", last_name_en)
         payload = {
             "id": mutamer_id,
-            "firstName": {"en": personal_data.get("first_name"), "ar": personal_data.get("arabic_first_name")},
+            "firstName": {"en": self.safe_get_stripped(personal_data, "first_name"), "ar": self.safe_get_stripped(personal_data, "arabic_first_name")},
             "secondName": {"en": None, "ar": None},
             "thirdName": {"en": None, "ar": None},
             "familyName": {"en": last_name_en, "ar": last_name_ar},
             "martialStatusId": martial_status_id,
-            "birthDate": personal_data.get("date_of_birth"),
+            "birthDate": self.safe_get_stripped(personal_data, "date_of_birth"),
             "profession": profession,
             "gender": 1 if personal_data.get("sex") == "M" else 2,
             "personalPictureId": passport["personalPicture"]["id"],
@@ -850,7 +922,7 @@ class PassportProcessor(QThread):
                 "showDelete": iqama_data.get("showDelete", True)
             },
             "residencyNumber": iqama_number,
-            "residencyExpirationDate": personal_data.get("date_of_expiry"),
+            "residencyExpirationDate": self.safe_get_stripped(personal_data, "date_of_expiry"),
             "vaccinationPictureId": vaccine_data["id"],
             "vaccinationPicture": {
                 "fileName": vaccine_data["fileName"],
@@ -866,7 +938,7 @@ class PassportProcessor(QThread):
             "postalCode": "",
             "poBox": "",
             "birthCountryId": 92,
-            "birthCityName": personal_data.get("city")
+            "birthCityName": self.safe_get_stripped(personal_data, "city")
         }
         
         # Add companion ID if provided
