@@ -161,7 +161,7 @@ class TokenExtractor:
             "contract_id": None,
         }
 
-        with open(json_file_path, "r") as f:
+        with open(json_file_path, "r", encoding="utf-8") as f:
             cdp_logs = json.load(f)
 
         for entry in cdp_logs:
