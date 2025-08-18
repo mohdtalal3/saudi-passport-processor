@@ -4,6 +4,7 @@ import json
 import shutil
 import time
 import re
+import uuid
 from datetime import datetime, date
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -245,7 +246,7 @@ class PassportProcessor(QThread):
     error_signal = pyqtSignal(str)
     auth_required_signal = pyqtSignal()
     
-    def __init__(self, passport_files, email, phone_number, create_group, group_name, token_data, user_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None, companion_mappings=None):
+    def __init__(self, passport_files, email, phone_number, create_group, group_name, token_data, user_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None, iqama_expiry_date=None, companion_mappings=None):
         super().__init__()
         self.passport_files = passport_files
         self.email = email
@@ -256,6 +257,7 @@ class PassportProcessor(QThread):
         self.use_separate_iqama = use_separate_iqama
         self.iqama_image_path = iqama_image_path
         self.iqama_number = iqama_number
+        self.iqama_expiry_date = iqama_expiry_date
         self.companion_mappings = companion_mappings or {}  # Store companion mappings
         # Use extracted token data passed from the GUI
         self.token_data = token_data
@@ -367,13 +369,13 @@ class PassportProcessor(QThread):
     def move_error_file(self, file_path, error_message):
         """Move error passport to separate folder"""
         try:
-            filename = os.path.basename(file_path)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Get file extension from original file
+            _, file_extension = os.path.splitext(file_path)
             
-            # Clean error message for filename (remove special characters)
-            error_part = re.sub(r'[^\w\s-]', '', error_message.replace(' ', '_'))[:50]
+            # Generate a 5-digit UUID-based identifier
+            uuid_str = str(uuid.uuid4()).replace('-', '')[:5]
             
-            new_filename = f"{timestamp}_ERROR_{error_part}_{filename}"
+            new_filename = f"error_{uuid_str}{file_extension}"
             destination = os.path.join(self.error_folder, new_filename)
             shutil.move(file_path, destination)
             self.log_signal.emit(f"Moved error passport to: {destination}")
@@ -431,7 +433,7 @@ class PassportProcessor(QThread):
                     passport_data = self.clean_passport_data(passport_data)
                     
                     # Process using API requests
-                    mutamer_id = self.process_passport_api(passport_file, passport_data, self.use_separate_iqama, self.iqama_image_path, self.iqama_number)
+                    mutamer_id = self.process_passport_api(passport_file, passport_data, self.use_separate_iqama, self.iqama_image_path, self.iqama_number, self.iqama_expiry_date)
                     if mutamer_id:
                         self.mutamer_ids.append(mutamer_id)
                         self.log_signal.emit(f"Created mutamer with ID: {mutamer_id}")
@@ -552,40 +554,81 @@ class PassportProcessor(QThread):
                 image_bytes = f.read()
             
             prompt = """
-        You are an expert OCR and document extraction model.
+You are an expert OCR and document extraction model.
 
-        Analyze the uploaded passport image and return the information in the following JSON format only:
+STRICT RULES FOR ARABIC CONVERSION:
+- Always convert names into **Standard Arabic** script only.  
+- Do NOT use non-Arabic letters such as: ٹ, ڈ, ں, ڑ, گ, ے, ہ (Urdu/Pashto/Persian characters).  
+- Replace them with the closest Standard Arabic letters:
 
-        {
-        "document_type": "passport",
-        "country": "",
-        "passport_number": "",
-        "first_name": "",         // remove any special characters 
-        "last_name": "",           // remove any special characters 
-        "arabic_first_name": "",  // Convert English name to Arabic
-        "arabic_last_name": "",  // Convert English name to Arabic
-        "date_of_birth": "",
-        "place_of_birth": "",
-        "city": "",              // Extract city from place of birth if available
-        "nationality": "",
-        "sex": "",
-        "date_of_issue": "",
-        "date_of_expiry": "",
-        "issuing_authority": "",
-        "cnic_number": "",       // Computerized National Identity Card number if available
-        "tracking_number": "",   // Tracking number if available
-        "booklet_number": "",    // Booklet number if available
-        "husband_name": "",      // If "Husband Name" field contains husband name. // remove any special characters  
-        "husband_arabic_name": "",  // Convert English name to Arabic
-        "father_name": "",       // If "Father Name" field contains father name. // remove any special characters
-        "father_arabic_name": "",   // Convert English name to Arabic
-        "married": ""            // True if husband name exists, False if father name exists
-        }
+  Character Replacement:
+  - ٹ → ت  
+  - ڈ → د  
+  - ں → ن  
+  - ڑ → ر  
+  - گ → ك (or ق if stronger "g/qaf" sound)  
+  - ے → ي  
+  - ہ → ه  
 
-        - Do not include any explanations or text outside the JSON.
-        - If a field is not found, leave it as an empty string.
-        - Date must be in the format of YYYY-MM-DD.
-        - Use English unless explicitly asked to translate to Arabic (like for full name).
+  Phonetic Rules for Transliteration:
+  - "kh" → خ   (e.g., Khattak → ختك)  
+  - "gh" → غ   (e.g., Shagufta → شغفتا)  
+  - "sh" → ش   (e.g., Shahid → شاهيد)  
+  - "ch" → تش or ش (choose based on common Arabic usage, e.g., Chaudhry → تشودري)  
+  - "th" (soft, as in "the") → ذ  
+  - "th" (hard, as in "think") → ث  
+  - "ph" → ف  
+  - "z" → ز  
+  - Double consonants must be simplified unless clearly part of the Arabic pattern.  
+
+  Examples:
+  - "Talal Khattak" → طلال ختك  
+  - "Shagufta" → شغفتا  
+  - "Gulzar" → كلزار  
+  - "Abdul Rehman" → عبد الرحمن  
+  - "Chaudhry" → تشودري  
+  - "Zahid" → زاهد  
+
+Analyze the uploaded passport image and return the information in the following JSON format only:
+
+{
+  "document_type": "passport",          // Always "passport"
+  "country": "",                        // Country of issuance
+  "passport_number": "",                // Passport number
+  "first_name": "",                     // From "Given Name" field; remove any special characters
+  "last_name": "",                      // From "Surname" field; remove any special characters
+  "arabic_first_name": "",              // Convert first name to Standard Arabic
+  "arabic_last_name": "",               // Convert surname to Standard Arabic
+  "date_of_birth": "",                  // Extract from DOB field
+  "place_of_birth": "",                 // Full place of birth
+  "city": "",                           // Extract only city from place_of_birth if available
+  "nationality": "",                    // Nationality of the passport holder
+  "sex": "",                            // Sex (M/F)
+  "date_of_issue": "",                  // Passport issue date
+  "date_of_expiry": "",                 // Passport expiry date
+  "issuing_authority": "",              // Issuing authority name
+  "cnic_number": "",                    // CNIC (Computerized National Identity Card) if printed
+  "tracking_number": "",                // Tracking number if available
+  "booklet_number": "",                 // Booklet number if available
+  "husband_name": "",                   // If field exists; note: in passports written as "SURNAME FIRSTNAME" → reorder to "FIRSTNAME SURNAME"
+  "husband_arabic_name": "",            // Convert reordered husband name into Standard Arabic
+  "father_name": "",                    // If field exists; note: in passports written as "SURNAME FIRSTNAME" → reorder to "FIRSTNAME SURNAME"
+  "father_arabic_name": "",             // Convert reordered father name into Standard Arabic
+  "married": ""                         // True if husband_name exists, False if father_name exists
+}
+
+
+- Do not include any explanations or text outside the JSON.
+- If a field is not found, leave it as an empty string.
+- Dates must be in the format YYYY-MM-DD.
+- English for all fields unless explicitly asked for Arabic.
+- For Arabic transliteration: Use only Standard Arabic script and follow the rules above.
+IMPORTANT NAMING CONVENTIONS: 
+- For first_name and last_name: Extract from the passport's "Given Name" and "Surname" fields respectively. Given Name = first_name, Surname = last_name. 
+- For husband_name and father_name: In Pakistani passports, these names are typically written as "SURNAME FIRSTNAME". Reorder them to proper "FIRSTNAME SURNAME" format. 
+- For husband_arabic_name and father_arabic_name: Convert the complete reordered name (FIRSTNAME SURNAME) to Arabic. 
+- Example: If passport shows "Father Name: KHAN AHMAD", then father_name should be "AHMAD KHAN" and father_arabic_name should be "أحمد خان". Same for Husband
+
         """
             
             response = self.model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
@@ -656,7 +699,7 @@ class PassportProcessor(QThread):
         else:
             return data
     
-    def process_passport_api(self, image_path, passport_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None):
+    def process_passport_api(self, image_path, passport_data, use_separate_iqama=False, iqama_image_path=None, iqama_number=None, iqama_expiry_date=None):
         """Process passport using API requests instead of selenium"""
         try:
             # Step 1: Scan passport
@@ -695,7 +738,7 @@ class PassportProcessor(QThread):
             
             # Step 5: Submit full personal info (with companion ID if available)
             self.log_signal.emit("Step 5: Submitting personal and contact information...")
-            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number, companion_id, companion_gender)
+            self.submit_full_info_api(mutamer_id, scanned_data, passport_data, iqama_data, vaccine_data, use_separate_iqama, iqama_number, iqama_expiry_date, companion_id, companion_gender)
             
             # Step 6: Submit disclosure form
             self.log_signal.emit("Step 6: Submitting disclosure form...")
@@ -843,7 +886,7 @@ class PassportProcessor(QThread):
         except Exception as e:
             raise Exception(f"Failed to upload attachment: {str(e)}")
     
-    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None, companion_id=None, companion_gender=None):
+    def submit_full_info_api(self, mutamer_id, scanned_data, personal_data, iqama_data, vaccine_data, use_separate_iqama=False, custom_iqama_number=None, custom_iqama_expiry_date=None, companion_id=None, companion_gender=None):
         """Step 3: Submit full personal and contact information"""
         passport = scanned_data["response"]["data"]["passportResponse"]
         
@@ -856,17 +899,58 @@ class PassportProcessor(QThread):
             iqama_number = match.group(1) if match else ""
             self.log_signal.emit(f"Using extracted Iqama number from passport: {iqama_number}")
         
-        # Marital status & profession rules
-        martial_status_map = {"single": 1, "married": 2}
-        if personal_data.get("sex") == "M":
-            martial_status_id = martial_status_map["single"]
-            profession = "Business"
-        elif personal_data.get("sex") == "F" and personal_data.get("married"):
-            martial_status_id = martial_status_map["married"]
-            profession = "Housewife"
+        # Extract iqama expiry date - use custom date if provided, otherwise use passport expiry date
+        if use_separate_iqama and custom_iqama_expiry_date:
+            iqama_expiry_date = custom_iqama_expiry_date.strip()
+            self.log_signal.emit(f"Using custom Iqama expiry date: {iqama_expiry_date}")
         else:
-            martial_status_id = martial_status_map["single"]
-            profession = "Household"
+            iqama_expiry_date = self.safe_get_stripped(personal_data, "date_of_expiry")
+            self.log_signal.emit(f"Using passport expiry date for Iqama: {iqama_expiry_date}")
+        
+        # Marital status & profession rules based on age and gender
+        martial_status_map = {"single": 1, "married": 2}
+        
+        # Calculate age for decision making
+        age = self.calculate_age(self.safe_get_stripped(personal_data, "date_of_birth"))
+        gender = personal_data.get("sex")
+        
+        # Default values
+        martial_status_id = martial_status_map["single"]
+        profession = "None"
+        
+        if age is not None:
+            if gender == "M":  # Male
+                if age >= 25:
+                    martial_status_id = martial_status_map["married"]
+                    profession = "Business"
+                elif age >= 18:
+                    martial_status_id = martial_status_map["single"]
+                    profession = "Business"
+                else:  # Under 18
+                    martial_status_id = martial_status_map["single"]
+                    profession = "None"
+            elif gender == "F":  # Female
+                if age >= 18:
+                    # Check if actually married from passport data
+                    if personal_data.get("married"):
+                        martial_status_id = martial_status_map["married"]
+                    else:
+                        martial_status_id = martial_status_map["single"]
+                    profession = "None"
+                else:  # Under 18
+                    martial_status_id = martial_status_map["single"]
+                    profession = "None"
+        else:
+            # Fallback if age cannot be calculated
+            self.log_signal.emit("Warning: Could not calculate age, using default values")
+            if gender == "M":
+                martial_status_id = martial_status_map["single"]
+                profession = "Business"
+            else:
+                martial_status_id = martial_status_map["single"]
+                profession = "None"
+        
+        self.log_signal.emit(f"Age: {age}, Gender: {gender}, Marital Status: {'married' if martial_status_id == 2 else 'single'}, Profession: {profession}")
         
         # Handle last name logic - if empty, use father's name or husband's name
         last_name_en = (personal_data.get("last_name") or "").strip()
@@ -922,7 +1006,7 @@ class PassportProcessor(QThread):
                 "showDelete": iqama_data.get("showDelete", True)
             },
             "residencyNumber": iqama_number,
-            "residencyExpirationDate": self.safe_get_stripped(personal_data, "date_of_expiry"),
+            "residencyExpirationDate": iqama_expiry_date,
             "vaccinationPictureId": vaccine_data["id"],
             "vaccinationPicture": {
                 "fileName": vaccine_data["fileName"],
@@ -1446,9 +1530,9 @@ class PassportGUI(QMainWindow):
         iqama_layout = QVBoxLayout(iqama_frame)
         iqama_layout.setContentsMargins(0, 10, 0, 0)
         
-        self.iqama_checkbox = QCheckBox("Use Separate Iqama Image & Number")
+        self.iqama_checkbox = QCheckBox("Use Separate Iqama Image, Number & Expiry Date")
         self.iqama_checkbox.setStyleSheet("margin-top: 20px; font-weight: bold;")
-        self.iqama_checkbox.setToolTip("Check this box to upload a separate Iqama image and enter a custom Iqama number.\nWhen unchecked, the passport image will be used for Iqama and the Iqama number will be extracted from the passport number's last digits.")
+        self.iqama_checkbox.setToolTip("Check this box to upload a separate Iqama image, enter a custom Iqama number, and set a custom Iqama expiry date.\nWhen unchecked, the passport image will be used for Iqama, the Iqama number will be extracted from the passport number's last digits, and the passport expiry date will be used for Iqama expiry.")
         self.iqama_checkbox.toggled.connect(self.toggle_iqama_options)
         iqama_layout.addWidget(self.iqama_checkbox)
         
@@ -1475,11 +1559,22 @@ class PassportGUI(QMainWindow):
         self.iqama_number_input.setPlaceholderText("Enter Iqama number...")
         self.iqama_number_input.setVisible(False)
         
+        # Iqama expiry date input (initially hidden)
+        self.iqama_expiry_label = QLabel("Iqama Expiry Date:")
+        self.iqama_expiry_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        self.iqama_expiry_label.setVisible(False)
+        
+        self.iqama_expiry_input = QLineEdit()
+        self.iqama_expiry_input.setPlaceholderText("YYYY-MM-DD (e.g., 2025-12-31)")
+        self.iqama_expiry_input.setVisible(False)
+        
         iqama_layout.addWidget(self.iqama_image_label)
         iqama_layout.addWidget(self.iqama_upload_btn)
         iqama_layout.addWidget(self.iqama_file_label)
         iqama_layout.addWidget(self.iqama_number_label)
         iqama_layout.addWidget(self.iqama_number_input)
+        iqama_layout.addWidget(self.iqama_expiry_label)
+        iqama_layout.addWidget(self.iqama_expiry_input)
         
         left_layout.addWidget(iqama_frame)
         
@@ -1733,12 +1828,15 @@ class PassportGUI(QMainWindow):
         self.iqama_file_label.setVisible(checked)
         self.iqama_number_label.setVisible(checked)
         self.iqama_number_input.setVisible(checked)
+        self.iqama_expiry_label.setVisible(checked)
+        self.iqama_expiry_input.setVisible(checked)
         
         if not checked:
             # Clear Iqama data when unchecked
             self.iqama_image_path = None
             self.iqama_file_label.setText("No Iqama image selected")
             self.iqama_number_input.clear()
+            self.iqama_expiry_input.clear()
     
     def upload_iqama_image(self):
         """Upload separate Iqama image"""
@@ -1932,6 +2030,7 @@ class PassportGUI(QMainWindow):
             self.iqama_checkbox.isChecked(),  # Use separate Iqama
             self.iqama_image_path,  # Iqama image path
             self.iqama_number_input.text().strip() if self.iqama_checkbox.isChecked() else None,  # Iqama number
+            self.iqama_expiry_input.text().strip() if self.iqama_checkbox.isChecked() else None,  # Iqama expiry date
             self.companion_mappings.copy() if self.companion_checkbox.isChecked() else {}  # Companion mappings
         )
         
