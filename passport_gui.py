@@ -278,17 +278,17 @@ class PassportProcessor(QThread):
             if user_api_key_str and user_api_key_str != '0':
                 # Use API key from Google Sheets (authenticated user's data)
                 genai.configure(api_key=user_api_key_str)
-                self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
+                self.model = genai.GenerativeModel("gemini-2.5-pro")
                 print("Using API key from Google Sheets user data")
             else:
                 # Only fallback to config if user has no valid API key in Google Sheets
-                genai.configure(api_key=config.GENAI_API_KEY)
-                self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
+                # genai.configure(api_key=config.GENAI_API_KEY)
+                # self.model = genai.GenerativeModel("gemini-2.5-pro")
                 print("Using fallback API key from config (user has no valid API key in Google Sheets)")
         else:
             # Only fallback to config if user has no API key in Google Sheets
-            genai.configure(api_key=config.GENAI_API_KEY)
-            self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
+            # genai.configure(api_key=config.GENAI_API_KEY)
+            # self.model = genai.GenerativeModel("gemini-2.5-pro")
             print("Using fallback API key from config (user has no API key in Google Sheets)")
         
         # Create processed and under-age folders if they don't exist
