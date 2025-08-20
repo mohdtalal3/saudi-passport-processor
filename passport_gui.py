@@ -5,6 +5,8 @@ import shutil
 import time
 import re
 import uuid
+import base64
+import cv2
 from datetime import datetime, date
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -14,7 +16,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QTableWidgetItem, QHeaderView, QComboBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QPalette, QColor, QPixmap, QIcon
-import google.generativeai as genai
+from PIL import Image, ImageOps
+from io import BytesIO
+from openai import OpenAI
 import requests
 from seleniumbase import SB
 import config
@@ -270,26 +274,25 @@ class PassportProcessor(QThread):
         self.error_count = 0
         self.under_age_count = 0
         
-        # Configure Gemini API with user's API key from Google Sheets
+        # Configure OpenAI API with user's API key from Google Sheets
         user_api_key = self.user_data.get('api_key') if self.user_data else None
         if user_api_key:
             # Convert to string and check if it's valid
             user_api_key_str = str(user_api_key).strip()
             if user_api_key_str and user_api_key_str != '0':
                 # Use API key from Google Sheets (authenticated user's data)
-                genai.configure(api_key=user_api_key_str)
-                self.model = genai.GenerativeModel("gemini-2.5-pro")
-                print("Using API key from Google Sheets user data")
+                self.openai_client = OpenAI(api_key=user_api_key_str)
+                print("Using OpenAI API key from Google Sheets user data")
             else:
                 # Only fallback to config if user has no valid API key in Google Sheets
-                # genai.configure(api_key=config.GENAI_API_KEY)
-                # self.model = genai.GenerativeModel("gemini-2.5-pro")
-                print("Using fallback API key from config (user has no valid API key in Google Sheets)")
+                # self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+                self.openai_client = None
+                print("User has no valid OpenAI API key in Google Sheets")
         else:
             # Only fallback to config if user has no API key in Google Sheets
-            # genai.configure(api_key=config.GENAI_API_KEY)
-            # self.model = genai.GenerativeModel("gemini-2.5-pro")
-            print("Using fallback API key from config (user has no API key in Google Sheets)")
+            # self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+            self.openai_client = None
+            print("User has no OpenAI API key in Google Sheets")
         
         # Create processed and under-age folders if they don't exist
         if not os.path.exists(self.processed_folder):
@@ -386,12 +389,35 @@ class PassportProcessor(QThread):
     
     def run(self):
         try:
-            self.log_signal.emit("Starting passport processing with API requests...")
+            self.log_signal.emit("Starting passport processing with batch OCR optimization...")
             self.log_signal.emit("Note: Any passport files with errors will be automatically moved to 'error_passports' folder for re-processing later.")
             self.log_signal.emit("")  # Empty line for readability
-            # Process each passport
-            total_passports = len(self.passport_files)
-            for i, passport_file in enumerate(self.passport_files):
+            
+            # Step 1: Batch OCR Processing
+            self.log_signal.emit("=" * 50)
+            self.log_signal.emit("STEP 1: BATCH OCR PROCESSING")
+            self.log_signal.emit("=" * 50)
+            
+            # Log the original order for verification
+            self.log_signal.emit("Processing order:")
+            for i, file_path in enumerate(self.passport_files, 1):
+                self.log_signal.emit(f"  {i}. {os.path.basename(file_path)}")
+            
+            passport_data_results, failed_files = self.batch_extract_passport_data(self.passport_files, batch_size=5)
+            print(passport_data_results)
+            # Move failed files to error folder
+            for failed_file in failed_files:
+                self.move_error_file(failed_file, "OCR extraction failed")
+                self.error_count += 1
+            
+            # Step 2: Individual Processing for Submission
+            self.log_signal.emit("\n" + "=" * 50)
+            self.log_signal.emit("STEP 2: INDIVIDUAL PASSPORT SUBMISSION")
+            self.log_signal.emit("=" * 50)
+            
+            total_passports = len(passport_data_results)
+            
+            for i, (passport_file, passport_data) in enumerate(passport_data_results):
                 try:
                     # Check if processing should be stopped
                     if self.should_stop_processing:
@@ -400,14 +426,12 @@ class PassportProcessor(QThread):
                     
                     self.log_signal.emit(f"\nProcessing passport {i+1}/{total_passports}: {os.path.basename(passport_file)}")
                     
-                    # Extract data using Gemini
-                    passport_data = self.extract_passport_data(passport_file)
-                    print(passport_data)
+                    # Use the already extracted data
                     if not passport_data:
-                        self.log_signal.emit(f"Failed to extract data from {os.path.basename(passport_file)}")
+                        self.log_signal.emit(f"No passport data available for {os.path.basename(passport_file)}")
                         continue
                     
-                    self.log_signal.emit(f"Extracted data: {passport_data.get('first_name', 'Unknown')} {passport_data.get('last_name', 'Unknown')}")
+                    self.log_signal.emit(f"Using pre-extracted data: {passport_data.get('first_name', 'Unknown')} {passport_data.get('last_name', 'Unknown')}")
                     
                     # Check age
                     birth_date = passport_data.get('date_of_birth')
@@ -432,11 +456,12 @@ class PassportProcessor(QThread):
                     # Clean special characters from English names
                     passport_data = self.clean_passport_data(passport_data)
                     
-                    # Process using API requests
+                    # Process using API requests (one by one)
                     mutamer_id = self.process_passport_api(passport_file, passport_data, self.use_separate_iqama, self.iqama_image_path, self.iqama_number, self.iqama_expiry_date)
                     if mutamer_id:
                         self.mutamer_ids.append(mutamer_id)
                         self.log_signal.emit(f"Created mutamer with ID: {mutamer_id}")
+                        self.processed_count += 1
                     
                     # Move processed file
                     self.move_processed_file(passport_file)
@@ -444,9 +469,6 @@ class PassportProcessor(QThread):
                     # Update progress
                     progress = int((i + 1) / total_passports * 100)
                     self.progress_signal.emit(progress)
-                    
-                    self.processed_count += 1
-                    self.log_signal.emit(f"Successfully processed {os.path.basename(passport_file)}")
                     
                 except requests.exceptions.HTTPError as e:
                     if e.response.status_code == 401:
@@ -548,6 +570,121 @@ class PassportProcessor(QThread):
                 
         return passport_data
     
+    
+    def preprocess_image(self, path: str, upscale_factor=1.5) -> bytes:
+        """Preprocess image for better OCR accuracy"""
+        img = cv2.imread(path)
+        if img is None:
+            raise FileNotFoundError(f"Could not read image at: {path}")
+
+        # Grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Upscale
+        if upscale_factor > 1:
+            gray = cv2.resize(
+                gray,
+                (int(gray.shape[1] * upscale_factor), int(gray.shape[0] * upscale_factor)),
+                interpolation=cv2.INTER_CUBIC
+            )
+
+        # Save to bytes
+        buf = BytesIO()
+        Image.fromarray(gray).save(buf, format="JPEG", quality=95)
+        return buf.getvalue()
+
+    def to_base64_jpeg(self, img_bytes: bytes) -> str:
+        """Convert image bytes to base64 string"""
+        return base64.b64encode(img_bytes).decode("utf-8")
+
+    def call_openai_vision(self, prompt: str, b64_img: str, model: str = "gpt-5-mini") -> dict:
+        """
+        Calls OpenAI API with a vision-capable model.
+        Forces JSON output using response_format.
+        """
+        if not self.openai_client:
+            raise Exception("OpenAI client not configured. Please check your API key.")
+
+        response = self.openai_client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},  # JSON-only mode
+        )
+
+        return {
+            "content": response.choices[0].message.content.strip(),
+            "usage": response.usage  # contains tokens
+        }
+    
+    def batch_extract_passport_data(self, passport_files, batch_size=5):
+        """
+        Extract passport data from multiple files in batches to speed up OCR processing
+        Maintains the original order of passport files
+        """
+        self.log_signal.emit(f"Starting batch OCR processing for {len(passport_files)} passports (batch size: {batch_size})...")
+        
+        passport_data_results = []  # List of tuples: (file_path, passport_data)
+        failed_files = []
+        
+        # Process files in batches while maintaining order
+        for i in range(0, len(passport_files), batch_size):
+            batch_files = passport_files[i:i+batch_size]
+            self.log_signal.emit(f"Processing OCR batch {i//batch_size + 1}: {len(batch_files)} passports")
+            
+            # Process this batch and maintain order
+            batch_results = self.process_ocr_batch(batch_files)
+            
+            # Add results in the original order of batch_files
+            for file_path in batch_files:
+                result = batch_results[file_path]
+                if result['success']:
+                    passport_data_results.append((file_path, result['data']))
+                    self.log_signal.emit(f"✓ OCR completed: {os.path.basename(file_path)}")
+                else:
+                    failed_files.append(file_path)
+                    self.log_signal.emit(f"✗ OCR failed: {os.path.basename(file_path)} - {result['error']}")
+            
+            # Small delay between batches to avoid rate limiting
+            time.sleep(1)
+        
+        self.log_signal.emit(f"Batch OCR completed. Success: {len(passport_data_results)}, Failed: {len(failed_files)}")
+        return passport_data_results, failed_files
+    
+    def process_ocr_batch(self, file_paths):
+        """
+        Process a batch of passport files for OCR using threading for parallel processing
+        Maintains the original order of file_paths
+        """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def extract_single_passport(file_path):
+            try:
+                data = self.extract_passport_data(file_path)
+                return {'success': True, 'data': data}
+            except Exception as e:
+                return {'success': False, 'error': str(e), 'data': None}
+        
+        # Use ThreadPoolExecutor to process files in parallel while maintaining order
+        with ThreadPoolExecutor(max_workers=min(len(file_paths), 5)) as executor:
+            # Use map to maintain order
+            results_list = list(executor.map(extract_single_passport, file_paths))
+        
+        # Create results dictionary maintaining original order
+        results = {}
+        for file_path, result in zip(file_paths, results_list):
+            results[file_path] = result
+        
+        return results
+    
     def extract_passport_data(self, image_path):
         try:
             with open(image_path, "rb") as f:
@@ -561,24 +698,6 @@ STRICT RULES FOR ARABIC CONVERSION:
 - Do NOT use non-Arabic letters such as: ٹ, ڈ, ں, ڑ, گ, ے, ہ (Urdu/Pashto/Persian characters).  
 - Replace them with the closest Standard Arabic letters:
 
-  Character Replacement:
-  - ٹ → ت  
-  - ڈ → د  
-  - ں → ن  
-  - ڑ → ر  
-  - گ → ك (or ق if stronger "g/qaf" sound)  
-  - ے → ي  
-  - ہ → ه  
-
-  Phonetic Rules for Transliteration:
-  - "kh" → خ   (e.g., Khattak → ختك)  
-  - "gh" → غ   (e.g., Shagufta → شغفتا)  
-  - "sh" → ش   (e.g., Shahid → شاهيد)  
-  - "ch" → تش or ش (choose based on common Arabic usage, e.g., Chaudhry → تشودري)  
-  - "th" (soft, as in "the") → ذ  
-  - "th" (hard, as in "think") → ث  
-  - "ph" → ف  
-  - "z" → ز  
   - Double consonants must be simplified unless clearly part of the Arabic pattern.  
 
   Examples:
@@ -595,8 +714,8 @@ Analyze the uploaded passport image and return the information in the following 
   "document_type": "passport",          // Always "passport"
   "country": "",                        // Country of issuance
   "passport_number": "",                // Passport number
-  "first_name": "",                     // From "Given Name" field; remove any special characters
-  "last_name": "",                      // From "Surname" field; remove any special characters
+  "first_name": "",                     // From "Given Name" field; remove any special characters. Use full Given name field as first name
+  "last_name": "",                      // From "Surname" field; remove any special characters. Use full Surname field as last name
   "arabic_first_name": "",              // Convert first name to Standard Arabic
   "arabic_last_name": "",               // Convert surname to Standard Arabic
   "date_of_birth": "",                  // Extract from DOB field
@@ -607,9 +726,6 @@ Analyze the uploaded passport image and return the information in the following 
   "date_of_issue": "",                  // Passport issue date
   "date_of_expiry": "",                 // Passport expiry date
   "issuing_authority": "",              // Issuing authority name
-  "cnic_number": "",                    // CNIC (Computerized National Identity Card) if printed
-  "tracking_number": "",                // Tracking number if available
-  "booklet_number": "",                 // Booklet number if available
   "husband_name": "",                   // If field exists; note: in passports written as "SURNAME FIRSTNAME" → reorder to "FIRSTNAME SURNAME"
   "husband_arabic_name": "",            // Convert reordered husband name into Standard Arabic
   "father_name": "",                    // If field exists; note: in passports written as "SURNAME FIRSTNAME" → reorder to "FIRSTNAME SURNAME"
@@ -623,29 +739,39 @@ Analyze the uploaded passport image and return the information in the following 
 - Dates must be in the format YYYY-MM-DD.
 - English for all fields unless explicitly asked for Arabic.
 - For Arabic transliteration: Use only Standard Arabic script and follow the rules above.
+
 IMPORTANT NAMING CONVENTIONS: 
-- For first_name and last_name: Extract from the passport's "Given Name" and "Surname" fields respectively. Given Name = first_name, Surname = last_name. 
+- For first_name and last_name: Extract from the passport's "Given Name" and "Surname" fields respectively. Given Name = first_name, Surname = last_name. Use full Given name field as first name.
 - For husband_name and father_name: In Pakistani passports, these names are typically written as "SURNAME FIRSTNAME". Reorder them to proper "FIRSTNAME SURNAME" format. 
 - For husband_arabic_name and father_arabic_name: Convert the complete reordered name (FIRSTNAME SURNAME) to Arabic. 
 - Example: If passport shows "Father Name: KHAN AHMAD", then father_name should be "AHMAD KHAN" and father_arabic_name should be "أحمد خان". Same for Husband
 
-        """
+SPECIAL HANDLING FOR MISSING GIVEN NAME:
+- If "Given Name" field is missing, empty, or not found:
+  1. If "Surname" field exists, use it as first_name and set last_name to empty string ""
+  3. Always ensure first_name is not empty - use any available name field as fallback
+- Examples:
+  - If only "Surname: AHMED" exists → first_name="AHMED", last_name=""
+"""
             
-            response = self.model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-            response_text = response.text.strip()
-            
-            # Clean response
-            if response_text.startswith('```json'):
-                response_text = response_text[7:]
-            if response_text.startswith('```'):
-                response_text = response_text[3:]
-            if response_text.endswith('```'):
-                response_text = response_text[:-3]
-            
-            response_text = response_text.replace('`', '').strip()
-            #print(f"Extracted response: {response_text}")  # Debug log
+            # 1) Preprocess image
+            processed_bytes = self.preprocess_image(image_path)
+
+            # 2) Encode to base64 for vision input
+            b64_img = self.to_base64_jpeg(processed_bytes)
+
+            # 3) Call OpenAI
+            result = self.call_openai_vision(prompt, b64_img)
+            response_text = result["content"]
+            usage = result["usage"]
+
+            # 4) Parse JSON
             passport_data = json.loads(response_text)
             
+            # 5) Log token usage info if available
+            if usage:
+                self.log_signal.emit(f"Token usage - Input: {usage.prompt_tokens}, Output: {usage.completion_tokens}, Total: {usage.total_tokens}")
+
             # Strip all fields to remove leading/trailing spaces
             return self.strip_passport_data(passport_data)
             
